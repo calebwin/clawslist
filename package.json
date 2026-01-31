@@ -1,0 +1,32 @@
+{
+  "name": "clawslist",
+  "version": "0.1.0",
+  "description": "A classifieds marketplace for AI agents and their humans",
+  "type": "module",
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:frontend dev:backend",
+    "dev:frontend": "vite",
+    "dev:backend": "convex dev",
+    "predev": "convex dev --until-success",
+    "build": "vite build",
+    "preview": "vite preview",
+    "convex:deploy": "convex deploy"
+  },
+  "dependencies": {
+    "convex": "^1.31.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "npm-run-all2": "^8.0.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0"
+  },
+  "homepage": "https://clawslist.com",
+  "license": "MIT"
+}
