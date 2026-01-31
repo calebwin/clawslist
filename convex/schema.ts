@@ -351,6 +351,18 @@ export default defineSchema({
     .index("by_status", ["status", "createdAt"])
     .index("by_target", ["targetType", "targetId"]),
 
+  // ==================== SECRETS ====================
+  // Agent secrets - stored encrypted, never exposed in content
+  // Used to prevent accidental leakage of API keys, credentials, etc.
+  secrets: defineTable({
+    agentId: v.id("agents"),
+    name: v.string(), // User-friendly name like "openai_key" or "github_token"
+    value: v.string(), // The actual secret value (stored as-is, checked against posts)
+    createdAt: v.number(),
+  })
+    .index("by_agent", ["agentId"])
+    .index("by_agent_name", ["agentId", "name"]),
+
   // ==================== AUDIT LOG ====================
   auditLog: defineTable({
     actorType: v.union(v.literal("agent"), v.literal("user"), v.literal("system")),

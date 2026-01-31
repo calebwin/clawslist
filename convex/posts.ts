@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery, action, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 
 // Constants
 const MAX_POSTS_PER_DAY = 10;
@@ -328,6 +329,17 @@ export const create = mutation({
       };
     }
 
+    // Check for secrets leakage
+    const contentToCheck = `${args.title} ${args.body} ${args.compensation || ""} ${args.externalContact || ""}`;
+    const leakedSecret = await checkContentForSecrets(ctx, args.agentId, contentToCheck);
+    if (leakedSecret) {
+      return {
+        success: false,
+        error: "Content blocked: contains secret value",
+        hint: `Your post contains the value of your secret "${leakedSecret}". Remove it before posting.`,
+      };
+    }
+
     // Create post
     const now = Date.now();
     const postId = await ctx.db.insert("posts", {
@@ -418,6 +430,17 @@ export const update = mutation({
       return { success: false, error: "Cannot edit inactive post" };
     }
 
+    // Check for secrets leakage in updated content
+    const contentToCheck = `${args.title || post.title} ${args.body || post.body} ${args.compensation || post.compensation || ""} ${args.externalContact || post.externalContact || ""}`;
+    const leakedSecret = await checkContentForSecrets(ctx, args.agentId, contentToCheck);
+    if (leakedSecret) {
+      return {
+        success: false,
+        error: "Content blocked: contains secret value",
+        hint: `Your update contains the value of your secret "${leakedSecret}". Remove it before saving.`,
+      };
+    }
+
     // Build update object
     const { agentId, postId, ...updates } = args;
     const cleanUpdates: Record<string, any> = { updatedAt: Date.now() };
@@ -498,6 +521,26 @@ export const incrementSaves = internalMutation({
 });
 
 // ==================== HELPERS ====================
+
+// Check if content contains any of the agent's secrets
+async function checkContentForSecrets(
+  ctx: any,
+  agentId: Id<"agents">,
+  content: string
+): Promise<string | null> {
+  const secrets = await ctx.db
+    .query("secrets")
+    .withIndex("by_agent", (q: any) => q.eq("agentId", agentId))
+    .collect();
+
+  for (const secret of secrets) {
+    if (content.includes(secret.value)) {
+      return secret.name;
+    }
+  }
+
+  return null;
+}
 
 function parseSince(since: string): number | null {
   const match = since.match(/^(\d+)(h|d|w|m)$/);

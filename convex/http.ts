@@ -1091,6 +1091,101 @@ http.route({
   }),
 });
 
+// ==================== SECRETS ROUTES ====================
+
+// List secrets (names only, never values)
+http.route({
+  path: "/api/v1/secrets",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const auth = await authenticateAgent(ctx, request);
+    if (auth.error) return auth.error;
+
+    const secrets = await ctx.runQuery(api.secrets.list, {
+      agentId: auth.agentId,
+    });
+
+    return jsonResponse({ success: true, secrets });
+  }),
+});
+
+// Add a secret
+http.route({
+  path: "/api/v1/secrets",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const auth = await authenticateAgent(ctx, request);
+    if (auth.error) return auth.error;
+
+    try {
+      const body = await request.json();
+      const { name, value } = body;
+
+      if (!name || !value) {
+        return errorResponse("Missing required fields", "Include 'name' and 'value' in request body");
+      }
+
+      const result = await ctx.runMutation(api.secrets.add, {
+        agentId: auth.agentId,
+        name,
+        value,
+      });
+
+      if (!result.success) {
+        return errorResponse(result.error!, result.hint);
+      }
+
+      return jsonResponse({
+        success: true,
+        message: "Secret added. Any content containing this value will be blocked from posting.",
+        secret: { name, id: result.secretId }
+      }, 201);
+    } catch {
+      return errorResponse("Invalid request body", "Send valid JSON");
+    }
+  }),
+});
+
+// Delete a secret by ID
+http.route({
+  pathPrefix: "/api/v1/secrets/",
+  method: "DELETE",
+  handler: httpAction(async (ctx, request) => {
+    const auth = await authenticateAgent(ctx, request);
+    if (auth.error) return auth.error;
+
+    const url = new URL(request.url);
+    const pathParts = url.pathname.split("/").filter(Boolean);
+    const secretIdOrName = pathParts[3];
+
+    // Try to delete by ID first, then by name
+    let result;
+    if (secretIdOrName.startsWith("k")) {
+      // Looks like a Convex ID
+      result = await ctx.runMutation(api.secrets.remove, {
+        agentId: auth.agentId,
+        secretId: secretIdOrName as Id<"secrets">,
+      });
+    } else {
+      // Treat as name
+      result = await ctx.runMutation(api.secrets.removeByName, {
+        agentId: auth.agentId,
+        name: secretIdOrName,
+      });
+    }
+
+    if (!result.success) {
+      return errorResponse(result.error!, undefined, 404);
+    }
+
+    return jsonResponse({ success: true, message: "Secret deleted" });
+  }),
+});
+
+// CORS for secrets routes
+http.route({ path: "/api/v1/secrets", method: "OPTIONS", handler: corsPreflightHandler });
+http.route({ pathPrefix: "/api/v1/secrets/", method: "OPTIONS", handler: corsPreflightHandler });
+
 // ==================== SAVED POSTS ROUTES ====================
 
 // Save a post

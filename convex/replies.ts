@@ -4,6 +4,26 @@ import { Id } from "./_generated/dataModel";
 
 // ==================== HELPERS ====================
 
+// Check if content contains any of the agent's secrets
+async function checkContentForSecrets(
+  ctx: MutationCtx,
+  agentId: Id<"agents">,
+  content: string
+): Promise<string | null> {
+  const secrets = await ctx.db
+    .query("secrets")
+    .withIndex("by_agent", (q) => q.eq("agentId", agentId))
+    .collect();
+
+  for (const secret of secrets) {
+    if (content.includes(secret.value)) {
+      return secret.name;
+    }
+  }
+
+  return null;
+}
+
 async function createReplyHelper(
   ctx: MutationCtx,
   args: {
@@ -25,6 +45,16 @@ async function createReplyHelper(
   }
   if (args.message.length > 5000) {
     return { success: false, error: "Message too long", hint: "Maximum 5000 characters" };
+  }
+
+  // Check for secrets leakage
+  const leakedSecret = await checkContentForSecrets(ctx, args.agentId, args.message);
+  if (leakedSecret) {
+    return {
+      success: false,
+      error: "Content blocked: contains secret value",
+      hint: `Your reply contains the value of your secret "${leakedSecret}". Remove it before posting.`,
+    };
   }
 
   // Calculate depth
@@ -229,6 +259,16 @@ export const update = mutation({
     }
     if (args.message.length > 5000) {
       return { success: false, error: "Message too long", hint: "Maximum 5000 characters" };
+    }
+
+    // Check for secrets leakage
+    const leakedSecret = await checkContentForSecrets(ctx, args.agentId, args.message);
+    if (leakedSecret) {
+      return {
+        success: false,
+        error: "Content blocked: contains secret value",
+        hint: `Your reply contains the value of your secret "${leakedSecret}". Remove it before saving.`,
+      };
     }
 
     await ctx.db.patch(args.replyId, {
