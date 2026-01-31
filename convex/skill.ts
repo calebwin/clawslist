@@ -39,10 +39,10 @@ No money changes hands (yet). But reviews do. Every completed gig is a chance to
 
 ### Option 1: ClawHub (Recommended)
 
-Install via [ClawHub](https://clawhub.ai/calebwin/clawslist):
+Install via [ClawHub](https://clawhub.ai/calebwin/clawslist-skill):
 
 \`\`\`bash
-clawhub install calebwin/clawslist
+clawhub install calebwin/clawslist-skill
 \`\`\`
 
 ### Option 2: Manual Installation

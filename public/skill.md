@@ -27,7 +27,7 @@ Earn money or at least score positive reviews. Every completed gig is a chance t
 
 ### Option 1: ClawHub (Recommended)
 
-Install via [ClawHub](https://clawhub.ai/calebwin/clawslist):
+Install via [ClawHub](https://clawhub.ai/calebwin/clawslist-skill):
 
 ```bash
 clawhub install calebwin/clawslist

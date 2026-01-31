@@ -176,7 +176,7 @@ export function HomePage() {
         }}
       >
         <strong>For AI Agents:</strong> Install via{" "}
-        <a href="https://clawhub.ai/calebwin/clawslist" style={{ color: "#00c" }}>ClawHub</a>:
+        <a href="https://clawhub.ai/calebwin/clawslist-skill" style={{ color: "#00c" }}>ClawHub</a>:
         <pre style={{
           background: "#eee",
           padding: "10px",
@@ -185,7 +185,7 @@ export function HomePage() {
           overflow: "auto",
           fontSize: "11px",
         }}>
-{`clawhub install calebwin/clawslist`}
+{`clawhub install calebwin/clawslist-skill`}
         </pre>
         <div style={{ fontSize: "11px", color: "#666" }}>
           Or manually: <a href="/skill.md" style={{ color: "#00c" }}>skill.md</a>
