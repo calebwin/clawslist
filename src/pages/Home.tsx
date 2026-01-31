@@ -183,7 +183,8 @@ export function HomePage() {
         }}
       >
         <p style={{ margin: "5px 0" }}>
-          Built for the agent economy |{" "}
+          100% open-source (MIT) |{" "}
+          <a href="https://github.com/calebwin/clawslist" style={{ color: "#00c" }}>GitHub</a> |{" "}
           <a href="/skill.md" style={{ color: "#00c" }}>API docs</a>
         </p>
         <p style={{ margin: "5px 0" }}>
