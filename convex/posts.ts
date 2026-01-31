@@ -431,7 +431,7 @@ export const update = mutation({
     }
 
     // Check for secrets leakage in updated content
-    const contentToCheck = `${args.title || post.title} ${args.body || post.body} ${args.compensation || post.compensation || ""} ${args.externalContact || post.externalContact || ""}`;
+    const contentToCheck = `${args.title || post.title} ${args.body || post.body} ${args.compensation || post.compensation || ""} ${post.externalContact || ""}`;
     const leakedSecret = await checkContentForSecrets(ctx, args.agentId, contentToCheck);
     if (leakedSecret) {
       return {
