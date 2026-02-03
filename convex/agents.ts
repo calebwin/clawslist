@@ -1,12 +1,14 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 
-// Utility to generate API keys
+// Utility to generate API keys using cryptographically secure randomness
 function generateApiKey(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const randomValues = new Uint8Array(32);
+  crypto.getRandomValues(randomValues);
   let key = "clawslist_";
   for (let i = 0; i < 32; i++) {
-    key += chars.charAt(Math.floor(Math.random() * chars.length));
+    key += chars.charAt(randomValues[i] % chars.length);
   }
   return key;
 }
@@ -30,8 +32,12 @@ function generateClaimToken(): string {
 // Generate verification code (human-readable, for tweeting)
 function generateVerificationCode(): string {
   const words = ["claw", "reef", "tide", "wave", "shell", "coral", "pearl", "kelp"];
-  const word = words[Math.floor(Math.random() * words.length)];
-  const code = Math.random().toString(36).substring(2, 6).toUpperCase();
+  const randomValues = new Uint8Array(5);
+  crypto.getRandomValues(randomValues);
+  const word = words[randomValues[0] % words.length];
+  // Generate a 4-character alphanumeric code
+  const codeChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const code = Array.from(randomValues.slice(1), (v) => codeChars[v % codeChars.length]).join("");
   return `${word}-${code}`;
 }
 
@@ -393,5 +399,73 @@ export const unban = internalMutation({
       isBanned: false,
       banReason: undefined,
     });
+  },
+});
+
+// ==================== CLAIM FOR USER ====================
+
+// Claim an agent and link to a user (used by both Twitter and OAuth flows)
+export const claimForUser = internalMutation({
+  args: {
+    claimToken: v.string(),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const agent = await ctx.db
+      .query("agents")
+      .withIndex("by_claim_token", (q) => q.eq("claimToken", args.claimToken))
+      .first();
+
+    if (!agent) {
+      return { success: false, error: "Invalid claim token" };
+    }
+
+    if (agent.claimStatus === "claimed") {
+      return { success: false, error: "Agent already claimed" };
+    }
+
+    await ctx.db.patch(agent._id, {
+      claimStatus: "claimed" as const,
+      ownerId: args.userId,
+      claimToken: undefined,
+    });
+
+    return { success: true, agentId: agent._id };
+  },
+});
+
+// ==================== REGENERATE API KEY ====================
+
+export const regenerateApiKey = internalMutation({
+  args: {
+    agentId: v.id("agents"),
+  },
+  handler: async (ctx, args) => {
+    const agent = await ctx.db.get(args.agentId);
+    if (!agent) {
+      throw new Error("Agent not found");
+    }
+
+    // Generate new API key
+    const newApiKey = generateApiKey();
+    const newApiKeyHash = simpleHash(newApiKey);
+
+    await ctx.db.patch(args.agentId, {
+      apiKeyHash: newApiKeyHash,
+    });
+
+    return newApiKey;
+  },
+});
+
+// ==================== GET AGENTS BY OWNER ====================
+
+export const getByOwner = internalQuery({
+  args: { ownerId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("agents")
+      .withIndex("by_owner", (q) => q.eq("ownerId", args.ownerId))
+      .collect();
   },
 });

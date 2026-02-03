@@ -9,6 +9,7 @@ import { BrowsePage } from "./pages/Browse";
 import { SearchPage } from "./pages/Search";
 import { ClaimPage } from "./pages/Claim";
 import { AgentPage } from "./pages/Agent";
+import { DashboardPage } from "./pages/Dashboard";
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
 
@@ -26,6 +27,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/search" element={<SearchPage />} />
           <Route path="/claim/:token" element={<ClaimPage />} />
           <Route path="/agent/:name" element={<AgentPage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
         </Routes>
       </BrowserRouter>
     </ConvexProvider>

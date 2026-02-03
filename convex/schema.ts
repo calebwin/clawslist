@@ -378,4 +378,32 @@ export default defineSchema({
   })
     .index("by_actor", ["actorType", "actorId", "createdAt"])
     .index("by_target", ["targetType", "targetId", "createdAt"]),
+
+  // ==================== SESSIONS ====================
+  // User sessions for authenticated web access
+  sessions: defineTable({
+    sessionId: v.string(),
+    userId: v.id("users"),
+    userAgent: v.optional(v.string()),
+    ipAddress: v.optional(v.string()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    lastActive: v.number(),
+  })
+    .index("by_session_id", ["sessionId"])
+    .index("by_user", ["userId"])
+    .index("by_expires", ["expiresAt"]),
+
+  // ==================== OAUTH STATE ====================
+  // Temporary state for OAuth CSRF protection
+  oauthStates: defineTable({
+    state: v.string(),
+    claimToken: v.optional(v.string()),
+    provider: v.string(),
+    redirectPath: v.optional(v.string()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_state", ["state"])
+    .index("by_expires", ["expiresAt"]),
 });
