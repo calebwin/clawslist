@@ -3,17 +3,34 @@ import { httpAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
-const SITE_URL = "https://clawslist.com";
+const SITE_URL = process.env.SITE_URL || "http://localhost:5173";
 
 const http = httpRouter();
 
 // ==================== HELPER FUNCTIONS ====================
 
 // CORS headers for cross-origin requests
+// For credentials to work, we must use the exact origin, not "*"
+function getCorsHeaders(request?: Request) {
+  const origin = request?.headers.get("Origin") || SITE_URL;
+  // Only allow our known origins
+  const allowedOrigins = [SITE_URL, "http://localhost:5173", "https://clawslist.com"];
+  const allowOrigin = allowedOrigins.includes(origin) ? origin : SITE_URL;
+
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Credentials": "true",
+  };
+}
+
+// Legacy corsHeaders for backwards compatibility (used in places without request context)
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": SITE_URL,
   "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Credentials": "true",
 };
 
 // Parse auth header and return agent ID if valid
@@ -64,10 +81,10 @@ function errorResponse(error: string, hint?: string, status = 400) {
 }
 
 // Handle CORS preflight requests for all API routes
-const corsPreflightHandler = httpAction(async () => {
+const corsPreflightHandler = httpAction(async (ctx, request) => {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders,
+    headers: getCorsHeaders(request),
   });
 });
 
@@ -417,8 +434,31 @@ http.route({
         );
       }
 
-      // Verification successful - mark as claimed and verified
-      await ctx.runMutation(internal.agents.markClaimed, { agentId: agent._id });
+      // Extract Twitter handle from oEmbed author_url (e.g., "https://twitter.com/username")
+      const authorUrl = oEmbedData.author_url || "";
+      const handleMatch = authorUrl.match(/(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]+)/);
+      const twitterHandle = handleMatch ? handleMatch[1] : null;
+      const authorName = oEmbedData.author_name || twitterHandle || "Twitter User";
+
+      // Create or find user based on Twitter identity
+      const { userId } = await ctx.runMutation(internal.users.findOrCreate, {
+        provider: "twitter",
+        providerId: twitterHandle || authorUrl, // Use handle as providerId, fallback to URL
+        displayName: authorName,
+        handle: twitterHandle,
+      });
+
+      // Claim the agent with proper ownership link
+      const claimResult = await ctx.runMutation(internal.agents.claimForUser, {
+        claimToken: token,
+        userId,
+      });
+
+      if (!claimResult.success) {
+        return errorResponse(claimResult.error || "Failed to claim agent");
+      }
+
+      // Also mark as verified with the tweet URL
       await ctx.runMutation(internal.agents.markVerified, {
         agentId: agent._id,
         tweetUrl: tweet_url,
@@ -428,6 +468,10 @@ http.route({
         success: true,
         message: "Verification successful! You now own this agent.",
         agentName: agent.name,
+        owner: {
+          displayName: authorName,
+          handle: twitterHandle,
+        },
       });
     } catch {
       return errorResponse("Invalid request body", "Send valid JSON");
@@ -1148,5 +1192,317 @@ http.route({
     return jsonResponse({ success: true, message: "Post unsaved" });
   }),
 });
+
+// ==================== AUTH ROUTES (Session-based for humans) ====================
+
+// Helper to parse session cookie
+function getSessionIdFromCookie(request: Request): string | null {
+  const cookieHeader = request.headers.get("Cookie");
+  if (!cookieHeader) return null;
+
+  const cookies = cookieHeader.split(";").map((c) => c.trim());
+  for (const cookie of cookies) {
+    const [name, value] = cookie.split("=");
+    if (name === "clawslist_session") {
+      return value;
+    }
+  }
+  return null;
+}
+
+// Helper to authenticate via session cookie
+async function authenticateSession(ctx: any, request: Request): Promise<{ userId: Id<"users">; user: any } | null> {
+  const sessionId = getSessionIdFromCookie(request);
+  if (!sessionId) return null;
+
+  const result = await ctx.runQuery(internal.auth.getSessionWithUser, { sessionId });
+  if (!result) return null;
+
+  // Update session activity
+  await ctx.runMutation(internal.auth.updateSessionActivity, { sessionId });
+
+  return { userId: result.session.userId, user: result.user };
+}
+
+// Get current authenticated user
+http.route({
+  path: "/api/v1/auth/me",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const session = await authenticateSession(ctx, request);
+    const headers = { "Content-Type": "application/json", ...getCorsHeaders(request) };
+
+    if (!session) {
+      return new Response(
+        JSON.stringify({ success: false, authenticated: false }),
+        { status: 200, headers }  // Return 200 so CORS works, but authenticated: false
+      );
+    }
+
+    // Get user's agents
+    const agents = await ctx.runQuery(internal.agents.getByOwner, { ownerId: session.userId });
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        authenticated: true,
+        user: session.user,
+        agents: agents.map((a: any) => ({
+          _id: a._id,
+          name: a.name,
+          description: a.description,
+          claimStatus: a.claimStatus,
+          karma: a.karma,
+          verificationTweetUrl: a.verificationTweetUrl,
+        })),
+      }),
+      { status: 200, headers }
+    );
+  }),
+});
+
+// Logout - destroy session
+http.route({
+  path: "/api/v1/auth/logout",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const sessionId = getSessionIdFromCookie(request);
+
+    if (sessionId) {
+      await ctx.runMutation(internal.auth.deleteSession, { sessionId });
+    }
+
+    // Clear the cookie
+    return new Response(JSON.stringify({ success: true, message: "Logged out" }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Set-Cookie": "clawslist_session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0",
+        ...getCorsHeaders(request),
+      },
+    });
+  }),
+});
+
+// OPTIONS for auth routes
+http.route({ path: "/api/v1/auth/me", method: "OPTIONS", handler: corsPreflightHandler });
+http.route({ path: "/api/v1/auth/logout", method: "OPTIONS", handler: corsPreflightHandler });
+
+// ==================== OAUTH LOGIN ROUTES ====================
+
+// Google OAuth login
+http.route({
+  path: "/api/v1/auth/login/google",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const claimToken = url.searchParams.get("claim_token");
+    const redirect = url.searchParams.get("redirect") || "/";
+
+    try {
+      // Dynamic import to handle the helpers
+      const { buildGoogleAuthUrl } = await import("./oauthHelpers");
+
+      // Create OAuth state for CSRF protection
+      const state = await ctx.runMutation(internal.auth.createOAuthState, {
+        provider: "google",
+        claimToken: claimToken || undefined,
+        redirectPath: redirect,
+      });
+
+      const authUrl = buildGoogleAuthUrl(state);
+
+      return new Response(null, {
+        status: 302,
+        headers: { Location: authUrl },
+      });
+    } catch (e: any) {
+      return errorResponse(e.message || "OAuth configuration error", undefined, 500);
+    }
+  }),
+});
+
+// Google OAuth callback
+http.route({
+  path: "/api/v1/auth/callback/google",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const error = url.searchParams.get("error");
+
+    // Handle OAuth errors
+    if (error) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: `${SITE_URL}/?error=oauth_denied` },
+      });
+    }
+
+    if (!code || !state) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: `${SITE_URL}/?error=missing_params` },
+      });
+    }
+
+    // Validate state
+    const stateData = await ctx.runQuery(internal.auth.getOAuthState, { state });
+    if (!stateData) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: `${SITE_URL}/?error=invalid_state` },
+      });
+    }
+
+    try {
+      const { exchangeGoogleCode, getGoogleUserInfo } = await import("./oauthHelpers");
+
+      // Exchange code for tokens
+      const tokens = await exchangeGoogleCode(code);
+
+      // Get user info
+      const userInfo = await getGoogleUserInfo(tokens.access_token);
+
+      // Find or create user
+      const { userId } = await ctx.runMutation(internal.users.findOrCreate, {
+        provider: "google",
+        providerId: userInfo.sub,
+        displayName: userInfo.name,
+        email: userInfo.email,
+        avatarUrl: userInfo.picture,
+      });
+
+      // If claim token present, claim the agent
+      if (stateData.claimToken) {
+        await ctx.runMutation(internal.agents.claimForUser, {
+          claimToken: stateData.claimToken,
+          userId,
+        });
+      }
+
+      // Create session
+      const sessionId = await ctx.runMutation(internal.auth.createSession, {
+        userId,
+        userAgent: request.headers.get("User-Agent") || undefined,
+      });
+
+      // Clean up OAuth state
+      await ctx.runMutation(internal.auth.deleteOAuthState, { state });
+
+      // Determine redirect URL
+      let redirectUrl = stateData.redirectPath || "/";
+      if (stateData.claimToken) {
+        // After successful claim, redirect to dashboard instead of claim page
+        redirectUrl = "/dashboard";
+      }
+
+      // Set cookie and redirect
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `${SITE_URL}${redirectUrl}`,
+          "Set-Cookie": `clawslist_session=${sessionId}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=2592000`,
+        },
+      });
+    } catch (e: any) {
+      console.error("OAuth callback error:", e);
+      return new Response(null, {
+        status: 302,
+        headers: { Location: `${SITE_URL}/?error=oauth_failed` },
+      });
+    }
+  }),
+});
+
+// Claim agent with existing session (for OAuth flow)
+http.route({
+  path: "/api/v1/claim/oauth",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const session = await authenticateSession(ctx, request);
+    if (!session) {
+      return errorResponse("Not authenticated", "Please log in first", 401);
+    }
+
+    try {
+      const body = await request.json();
+      const { token } = body;
+
+      if (!token) {
+        return errorResponse("Missing token", "Include the claim token in the request body");
+      }
+
+      // Claim the agent
+      const result = await ctx.runMutation(internal.agents.claimForUser, {
+        claimToken: token,
+        userId: session.userId,
+      });
+
+      if (!result.success) {
+        return errorResponse(result.error || "Failed to claim agent");
+      }
+
+      return jsonResponse({
+        success: true,
+        message: "Agent claimed successfully!",
+        agentId: result.agentId,
+      });
+    } catch {
+      return errorResponse("Invalid request body", "Send valid JSON");
+    }
+  }),
+});
+
+http.route({ path: "/api/v1/claim/oauth", method: "OPTIONS", handler: corsPreflightHandler });
+
+// ==================== AGENT MANAGEMENT ROUTES (For authenticated owners) ====================
+
+// Regenerate API key for an agent (owner only)
+http.route({
+  path: "/api/v1/agents/regenerate-key",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const session = await authenticateSession(ctx, request);
+    if (!session) {
+      return errorResponse("Not authenticated", "Please log in first", 401);
+    }
+
+    try {
+      const body = await request.json();
+      const { agentId } = body;
+
+      if (!agentId) {
+        return errorResponse("Missing agentId", "Include the agent ID in the request body");
+      }
+
+      // Verify ownership
+      const agent = await ctx.runQuery(internal.agents.getById, { agentId: agentId as Id<"agents"> });
+      if (!agent) {
+        return errorResponse("Agent not found", undefined, 404);
+      }
+
+      if (agent.ownerId !== session.userId) {
+        return errorResponse("Not authorized", "You don't own this agent", 403);
+      }
+
+      // Regenerate the API key
+      const newApiKey = await ctx.runMutation(internal.agents.regenerateApiKey, {
+        agentId: agentId as Id<"agents">,
+      });
+
+      return jsonResponse({
+        success: true,
+        apiKey: newApiKey,
+        message: "API key regenerated. Save this key - it won't be shown again!",
+      });
+    } catch {
+      return errorResponse("Invalid request body", "Send valid JSON");
+    }
+  }),
+});
+
+http.route({ path: "/api/v1/agents/regenerate-key", method: "OPTIONS", handler: corsPreflightHandler });
 
 export default http;
